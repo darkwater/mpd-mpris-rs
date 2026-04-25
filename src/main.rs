@@ -195,25 +195,39 @@ fn spawn_worker(
             info!("mpd command/status connection established");
             let _ = send_snapshot(&mut client, &snapshot_tx);
 
-            loop {
+            'connected: loop {
                 let event = match event_rx.recv() {
                     Ok(event) => event,
                     Err(_) => return,
                 };
 
+                let mut needs_refresh = true;
+
                 if let WorkerEvent::Command(cmd) = event
                     && let Err(err) = handle_command(&mut client, cmd)
                 {
                     warn!("mpd command error: {err}");
-                    break;
+                    break 'connected;
                 }
 
-                if let Err(err) = send_snapshot(&mut client, &snapshot_tx) {
-                    if snapshot_tx.is_closed() {
-                        return;
+                while let Ok(next_event) = event_rx.try_recv() {
+                    if let WorkerEvent::Command(cmd) = next_event
+                        && let Err(err) = handle_command(&mut client, cmd)
+                    {
+                        warn!("mpd command error: {err}");
+                        break 'connected;
                     }
-                    warn!("mpd refresh error: {err}");
-                    break;
+                    needs_refresh = true;
+                }
+
+                if needs_refresh {
+                    if let Err(err) = send_snapshot(&mut client, &snapshot_tx) {
+                        if snapshot_tx.is_closed() {
+                            return;
+                        }
+                        warn!("mpd refresh error: {err}");
+                        break 'connected;
+                    }
                 }
             }
         }
