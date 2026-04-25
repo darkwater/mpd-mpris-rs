@@ -1,0 +1,11 @@
+[package]
+name = "mpd-mpris-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+env_logger = "0.11.8"
+log = "0.4.28"
+mpd = "0.1.0"
+mpris-server = { version = "0.10.0", features = ["tokio"] }
+tokio = { version = "1.48.0", features = ["macros", "rt", "signal", "time"] }
