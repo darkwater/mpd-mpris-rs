@@ -69,6 +69,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         password: std::env::var("MPD_PASSWORD").ok(),
     };
 
+    info!("mpd config: addr={} password_set={}", cfg.addr, cfg.password.is_some());
+
     let player = Player::builder("mpd")
         .identity("MPD")
         .can_control(true)
@@ -187,7 +189,7 @@ fn spawn_worker(
                 Ok(client) => client,
                 Err(err) => {
                     warn!("mpd connect error: {err}");
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_secs(2));
                     continue;
                 }
             };
@@ -241,7 +243,7 @@ fn spawn_idle_listener(cfg: MpdConfig, event_tx: mpsc::Sender<WorkerEvent>) {
                 Ok(client) => client,
                 Err(err) => {
                     warn!("mpd idle connect error: {err}");
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_secs(2));
                     continue;
                 }
             };
