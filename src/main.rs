@@ -5,7 +5,7 @@ use std::time::Duration;
 use log::{debug, info, warn};
 use mpd::idle::{Idle, Subsystem};
 use mpd::{Client, Song, State};
-use mpris_server::{Metadata, PlaybackStatus, Player, Time, TrackId};
+use mpris_server::{LoopStatus, Metadata, PlaybackStatus, Player, Time, TrackId};
 
 #[derive(Clone)]
 struct MpdConfig {
@@ -21,6 +21,8 @@ enum Command {
     PlayPause,
     Stop,
     Play,
+    SetLoopStatus(LoopStatus),
+    SetShuffle(bool),
     SeekRelative(i64),
     SetPosition { track_id: String, position: i64 },
 }
@@ -34,6 +36,8 @@ enum WorkerEvent {
 #[derive(Debug)]
 struct Snapshot {
     playback_status: PlaybackStatus,
+    loop_status: LoopStatus,
+    shuffle: bool,
     can_go_next: bool,
     can_go_previous: bool,
     can_seek: bool,
@@ -144,6 +148,18 @@ fn wire_controls(player: &Player, event_tx: mpsc::Sender<WorkerEvent>) {
             let _ = tx.send(WorkerEvent::Command(Command::SeekRelative(
                 offset.as_micros(),
             )));
+        });
+    }
+    {
+        let tx = event_tx.clone();
+        player.connect_set_loop_status(move |_, loop_status| {
+            let _ = tx.send(WorkerEvent::Command(Command::SetLoopStatus(loop_status)));
+        });
+    }
+    {
+        let tx = event_tx.clone();
+        player.connect_set_shuffle(move |_, shuffle| {
+            let _ = tx.send(WorkerEvent::Command(Command::SetShuffle(shuffle)));
         });
     }
     {
@@ -268,6 +284,21 @@ fn handle_command(client: &mut Client, cmd: Command) -> Result<(), mpd::error::E
         Command::PlayPause => client.toggle_pause(),
         Command::Stop => client.stop(),
         Command::Play => client.play(),
+        Command::SetLoopStatus(loop_status) => match loop_status {
+            LoopStatus::None => {
+                client.repeat(false)?;
+                client.single(false)
+            }
+            LoopStatus::Track => {
+                client.repeat(true)?;
+                client.single(true)
+            }
+            LoopStatus::Playlist => {
+                client.repeat(true)?;
+                client.single(false)
+            }
+        },
+        Command::SetShuffle(shuffle) => client.random(shuffle),
         Command::SeekRelative(offset_micros) => {
             let status = client.status()?;
             let current = status
@@ -322,6 +353,8 @@ fn take_snapshot(client: &mut Client) -> Result<Snapshot, mpd::error::Error> {
 
     Ok(Snapshot {
         playback_status: playback_status(status.state),
+        loop_status: loop_status(&status),
+        shuffle: status.random,
         can_go_next: status.nextsong.is_some(),
         can_go_previous: status.song.map(|s| s.pos > 0).unwrap_or(false),
         can_seek: duration_micros.is_some(),
@@ -339,6 +372,18 @@ fn playback_status(state: State) -> PlaybackStatus {
         State::Play => PlaybackStatus::Playing,
         State::Pause => PlaybackStatus::Paused,
         State::Stop => PlaybackStatus::Stopped,
+    }
+}
+
+fn loop_status(status: &mpd::Status) -> LoopStatus {
+    if status.repeat {
+        if status.single {
+            LoopStatus::Track
+        } else {
+            LoopStatus::Playlist
+        }
+    } else {
+        LoopStatus::None
     }
 }
 
@@ -400,6 +445,8 @@ async fn apply_snapshot(
     snapshot: Snapshot,
 ) -> Result<(), mpris_server::zbus::Error> {
     player.set_playback_status(snapshot.playback_status).await?;
+    player.set_loop_status(snapshot.loop_status).await?;
+    player.set_shuffle(snapshot.shuffle).await?;
     player.set_can_go_next(snapshot.can_go_next).await?;
     player.set_can_go_previous(snapshot.can_go_previous).await?;
     player.set_can_seek(snapshot.can_seek).await?;
